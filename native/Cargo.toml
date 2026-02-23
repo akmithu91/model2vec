@@ -1,0 +1,21 @@
+[package]
+name    = "model2vec-jni"
+version = "0.3.0"
+edition = "2021"
+
+[lib]
+name       = "model2vec_jni"
+crate-type = ["cdylib"]
+
+[dependencies]
+anyhow       = "1"
+jni          = { version = "0.21", default-features = false }
+model2vec-rs = "0.1"
+# http feature required for Tokenizer::from_pretrained
+tokenizers   = { version = "0.21", features = ["http"] }
+
+[profile.release]
+opt-level     = 3
+lto           = true
+codegen-units = 1
+strip         = "symbols"
