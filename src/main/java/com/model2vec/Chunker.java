@@ -50,12 +50,31 @@ public final class Chunker implements AutoCloseable {
 
     private long nativeHandle = 0;
 
-    /** Create with default {@link SnapCfg}. */
+    /**
+     * Create a new Chunker with default {@link SnapCfg}.
+     *
+     * @param tokenizerRepoOrPath name of the HuggingFace repo (e.g., {@code "bert-base-uncased"})
+     *                            or absolute path to a folder containing {@code tokenizer.json}.
+     * @param chunkSize           target chunk size in tokens.
+     * @param stride              number of tokens to overlap between chunks.
+     * @throws IllegalArgumentException if any argument is invalid.
+     * @throws RuntimeException         if native initialization fails.
+     */
     public Chunker(String tokenizerRepoOrPath, int chunkSize, int stride) {
         this(tokenizerRepoOrPath, chunkSize, stride, new SnapCfg());
     }
 
-    /** Create with custom {@link SnapCfg}. */
+    /**
+     * Create a new Chunker with custom {@link SnapCfg}.
+     *
+     * @param tokenizerRepoOrPath name of the HuggingFace repo (e.g., {@code "bert-base-uncased"})
+     *                            or absolute path to a folder containing {@code tokenizer.json}.
+     * @param chunkSize           target chunk size in tokens.
+     * @param stride              number of tokens to overlap between chunks.
+     * @param snapCfg             configuration for sentence/paragraph boundary-snapping.
+     * @throws IllegalArgumentException if any argument is invalid or {@code snapCfg} is null.
+     * @throws RuntimeException         if native initialization fails.
+     */
     public Chunker(String tokenizerRepoOrPath, int chunkSize, int stride, SnapCfg snapCfg) {
         if (chunkSize <= 0) throw new IllegalArgumentException("chunkSize must be > 0");
         if (stride    <= 0) throw new IllegalArgumentException("stride must be > 0");
