@@ -1,5 +1,7 @@
 package com.model2vec;
 
+import java.lang.foreign.*;
+import java.lang.invoke.MethodHandle;
 import java.nio.charset.StandardCharsets;
 
 /**
@@ -21,34 +23,32 @@ import java.nio.charset.StandardCharsets;
  * }
  * }</pre>
  *
- * <p>Using {@code getBytes(UTF_8)} once per text and {@code new String(...)}
- * per chunk is correct for both ASCII and Unicode input. The chunker returns
- * raw UTF-8 byte offsets from the tokenizer — no conversion on the Rust side.</p>
- *
- * <h3>JNI cost</h3>
- * <p>A single {@code set_int_array_region} call (bulk memcpy) crosses the JNI
- * boundary, regardless of how many chunks were produced. There are zero
- * {@code new_string()} calls from the Rust side.</p>
- *
- * <h3>Threading</h3>
- * <p>{@link #chunk} is thread-safe. The tokenizer is read-only after construction.</p>
- *
- * <pre>{@code
- * // Default SnapCfg
- * try (Chunker c = new Chunker("bert-base-uncased", 128, 128)) {
- *     int[] offsets = c.chunk("Long article text...");
- * }
- *
- * // Custom SnapCfg
- * SnapCfg cfg = new SnapCfg().setMaxForwardBytes(512).setPreferParagraph(false);
- * try (Chunker c = new Chunker("bert-base-uncased", 128, 128, cfg)) { ... }
- * }</pre>
+ * <p>FFM is used for native access to the Rust-backed chunker.</p>
  */
 public final class Chunker implements AutoCloseable {
 
-    static { NativeLoader.load(); }
+    private static final Linker LINKER = Linker.nativeLinker();
+    private static final SymbolLookup LOOKUP = NativeLoader.load();
 
-    private long nativeHandle = 0;
+    private static final MethodHandle CREATE_MH = LINKER.downcallHandle(
+            LOOKUP.find("chunker_create").get(),
+            FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
+                    ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_BOOLEAN, ValueLayout.JAVA_BOOLEAN)
+    );
+    private static final MethodHandle FREE_MH = LINKER.downcallHandle(
+            LOOKUP.find("chunker_free").get(),
+            FunctionDescriptor.ofVoid(ValueLayout.ADDRESS)
+    );
+    private static final MethodHandle CHUNK_MH = LINKER.downcallHandle(
+            LOOKUP.find("chunker_chunk").get(),
+            FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS)
+    );
+    private static final MethodHandle FREE_OFFSETS_MH = LINKER.downcallHandle(
+            LOOKUP.find("chunker_free_offsets").get(),
+            FunctionDescriptor.ofVoid(ValueLayout.ADDRESS, ValueLayout.JAVA_LONG)
+    );
+
+    private MemorySegment nativeHandle;
 
     /**
      * Create a new Chunker with default {@link SnapCfg}.
@@ -79,12 +79,17 @@ public final class Chunker implements AutoCloseable {
         if (chunkSize <= 0) throw new IllegalArgumentException("chunkSize must be > 0");
         if (stride    <= 0) throw new IllegalArgumentException("stride must be > 0");
         if (snapCfg   == null) throw new IllegalArgumentException("snapCfg must not be null");
-        nativeCreate(tokenizerRepoOrPath, chunkSize, stride,
-                snapCfg.getMaxForwardBytes(),
-                snapCfg.getMaxBackwardBytes(),
-                snapCfg.isPreferParagraph(),
-                snapCfg.isTrimWhitespace());
-        if (nativeHandle == 0)
+        
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment path = arena.allocateFrom(tokenizerRepoOrPath);
+            this.nativeHandle = (MemorySegment) CREATE_MH.invokeExact(path, chunkSize, stride,
+                    snapCfg.getMaxForwardBytes(), snapCfg.getMaxBackwardBytes(),
+                    snapCfg.isPreferParagraph(), snapCfg.isTrimWhitespace());
+        } catch (Throwable t) {
+            throw new RuntimeException("chunker_create failed", t);
+        }
+        
+        if (nativeHandle.equals(MemorySegment.NULL))
             throw new RuntimeException("nativeCreate did not initialise the handle");
     }
 
@@ -97,8 +102,23 @@ public final class Chunker implements AutoCloseable {
      *         or produces no tokens.
      */
     public int[] chunk(String text) {
-        if (nativeHandle == 0) throw new IllegalStateException("Chunker already closed");
-        return nativeChunk(text);
+        if (nativeHandle.equals(MemorySegment.NULL)) throw new IllegalStateException("Chunker already closed");
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment textSeg = arena.allocateFrom(text);
+            MemorySegment outLenSeg = arena.allocate(ValueLayout.JAVA_LONG);
+            MemorySegment ptr = (MemorySegment) CHUNK_MH.invokeExact(nativeHandle, textSeg, outLenSeg);
+            
+            if (ptr.equals(MemorySegment.NULL)) return new int[0];
+            
+            long len = outLenSeg.get(ValueLayout.JAVA_LONG, 0);
+            int[] offsets = new int[(int) len];
+            MemorySegment.copy(ptr.reinterpret(len * 4), ValueLayout.JAVA_INT, 0, offsets, 0, (int) len);
+            
+            FREE_OFFSETS_MH.invokeExact(ptr, len);
+            return offsets;
+        } catch (Throwable t) {
+            throw new RuntimeException("chunk failed", t);
+        }
     }
 
     /**
@@ -124,13 +144,13 @@ public final class Chunker implements AutoCloseable {
 
     @Override
     public void close() {
-        if (nativeHandle != 0) { nativeDestroy(); nativeHandle = 0; }
+        if (!nativeHandle.equals(MemorySegment.NULL)) {
+            try {
+                FREE_MH.invokeExact(nativeHandle);
+            } catch (Throwable t) {
+                // ignore
+            }
+            nativeHandle = MemorySegment.NULL;
+        }
     }
-
-    private native void  nativeCreate(String tokenizerRepoOrPath,
-                                      int chunkSize, int stride,
-                                      int maxForwardBytes, int maxBackwardBytes,
-                                      boolean preferParagraph, boolean trimWhitespace);
-    private native void  nativeDestroy();
-    private native int[] nativeChunk(String text);
 }
