@@ -10,13 +10,12 @@ phases:
   build:
     commands:
       - echo "Building Docker image..."
-      - cd examples/readwrite/maven
       - docker buildx build
           --cache-from type=local,src=/tmp/docker-cache
           --cache-to type=local,dest=/tmp/docker-cache,mode=max
           --build-arg CODEARTIFACT_URL="${CODEARTIFACT_URL}"
           --secret id=token,env=CODEARTIFACT_TOKEN
-          -t hello-maven
+          -t model2vec
           --load
           .
   post_build:
