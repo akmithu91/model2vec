@@ -1,0 +1,28 @@
+version: 0.2
+
+phases:
+  pre_build:
+    commands:
+      - echo "Authenticating with CodeArtifact..."
+      - export CODEARTIFACT_TOKEN=$(aws codeartifact get-authorization-token --domain $CODEARTIFACT_DOMAIN --domain-owner $CODEARTIFACT_DOMAIN_OWNER --query authorizationToken --output text)
+      - export CODEARTIFACT_URL=$(aws codeartifact get-repository-endpoint --domain $CODEARTIFACT_DOMAIN --domain-owner $CODEARTIFACT_DOMAIN_OWNER --repository maven-repo --format maven --query repositoryEndpoint --output text)
+      - docker buildx create --use --driver docker-container
+  build:
+    commands:
+      - echo "Building Docker image..."
+      - cd examples/readwrite/maven
+      - docker buildx build
+          --cache-from type=local,src=/tmp/docker-cache
+          --cache-to type=local,dest=/tmp/docker-cache,mode=max
+          --build-arg CODEARTIFACT_URL="${CODEARTIFACT_URL}"
+          --secret id=token,env=CODEARTIFACT_TOKEN
+          -t hello-maven
+          --load
+          .
+  post_build:
+    commands:
+      - echo "Package published to CodeArtifact maven-repo"
+
+cache:
+  paths:
+    - "/tmp/docker-cache/**/*"
