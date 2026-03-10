@@ -6,13 +6,14 @@ phases:
       - echo "Authenticating with CodeArtifact..."
       - export CODEARTIFACT_TOKEN=$(aws codeartifact get-authorization-token --domain $CODEARTIFACT_DOMAIN --domain-owner $CODEARTIFACT_DOMAIN_OWNER --query authorizationToken --output text)
       - export CODEARTIFACT_URL=$(aws codeartifact get-repository-endpoint --domain $CODEARTIFACT_DOMAIN --domain-owner $CODEARTIFACT_DOMAIN_OWNER --repository maven-repo --format maven --query repositoryEndpoint --output text)
+      - echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
       - docker buildx create --use --driver docker-container
   build:
     commands:
       - echo "Building Docker image..."
       - docker buildx build
-          --cache-from type=local,src=/tmp/docker-cache
-          --cache-to type=local,dest=/tmp/docker-cache,mode=max
+          --cache-from type=s3,region=${AWS_REGION},bucket=${CACHE_BUCKET},prefix=${CACHE_PREFIX}/
+          --cache-to type=s3,region=${AWS_REGION},bucket=${CACHE_BUCKET},prefix=${CACHE_PREFIX}/,mode=max
           --build-arg CODEARTIFACT_URL="${CODEARTIFACT_URL}"
           --secret id=token,env=CODEARTIFACT_TOKEN
           -t model2vec
